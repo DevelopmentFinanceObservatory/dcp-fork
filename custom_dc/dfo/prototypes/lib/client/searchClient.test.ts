@@ -559,43 +559,6 @@ describe("resolveStream stall timeout", () => {
       });
     });
 
-    // Contract v1: spec_resubmit posts the nested `identity` verbatim, with
-    // `base_spec_id`/`base_identity`/`removed`/`resolved_stat_var_dcids` as
-    // siblings -- buildRequest is a straight passthrough with no flat-shape
-    // mapping.
-    it("passes a spec_resubmit input through unchanged, with no flat shape/slots fields", () => {
-      const identity = {
-        identity_version: "spec1" as const,
-        shape: { kind: "statvar_schema" as const, population_type: "Person" },
-        slots: [
-          {
-            property: "gender",
-            binding: { state: "value" as const, ref: "Female" },
-          },
-        ],
-        entities: { observationAbout: ["country/KEN"] },
-        requested_window: { kind: "all" as const },
-      };
-      const req = buildRequest({
-        kind: "spec_resubmit",
-        identity,
-        base_spec_id: "spec_prior",
-        base_identity: identity,
-        resolved_stat_var_dcids: ["Count_Person_Female"],
-      });
-      expect(req.input).toEqual({
-        kind: "spec_resubmit",
-        identity,
-        base_spec_id: "spec_prior",
-        base_identity: identity,
-        resolved_stat_var_dcids: ["Count_Person_Female"],
-      });
-      expect("shape" in (req.input as object)).toBe(false);
-      expect("slots" in (req.input as object)).toBe(false);
-      expect("shape_id" in (req.input as object)).toBe(false);
-      expect("donor_dcid" in (req.input as object)).toBe(false);
-    });
-
     it("passes a dataset_resubmit input through unchanged, with entries and an optional raw_query", () => {
       const entries = [
         {

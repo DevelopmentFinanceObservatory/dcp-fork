@@ -103,9 +103,6 @@ vi.mock("./lib/store", () => {
     async resolve(): Promise<ResolveResponse> {
       return response;
     }
-    async resubmit(): Promise<ResolveResponse> {
-      return response;
-    }
   }
 
   return { useSpecStore: createSpecStore(new StubTransport()) };

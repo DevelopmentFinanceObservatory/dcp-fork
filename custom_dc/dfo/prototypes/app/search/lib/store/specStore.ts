@@ -11,7 +11,6 @@
  *   - chooseSpec(partIndex, spec)    promote a candidate in parts[partIndex]
  *   - editShared(edit)               rebind a hoisted where/when/source/origin axis on every definite part, in one post
  *   - refineText(partIndex, text)    free-text phrase refine on parts[partIndex] (raw_text)
- *   - resubmit(partIndex, identity)  transport-agnostic direct-identity resubmit, not called by the UI
  *
  * The store is transport-agnostic: createSpecStore(transport) injects the adapter,
  * so tests use a stub transport and the app uses the singleton (the live engine).
@@ -19,7 +18,7 @@
  * Request lifecycle: a raw-text/spec_id run is whole-store scoped — beginRunOp()
  * aborts the previous run AND any edit in flight (a fresh query supersedes
  * everything). Every edit that posts through the dataset door (editSlot,
- * editDonor, chooseSpec, editShared, resubmit) shares ONE controller: a
+ * editDonor, chooseSpec, editShared) shares ONE controller: a
  * dataset_resubmit always resubmits the whole envelope together, so nothing
  * needs fencing per part index. Starting a new dataset edit aborts whatever
  * dataset post is still in flight. While a post is in flight, the NEXT edit
@@ -283,13 +282,6 @@ export interface SpecState {
 
   resolve: (rawText: string) => Promise<void>;
   runSpecId: (specId: string, queryHint?: string) => Promise<void>;
-  /** Post `identity` verbatim as parts[partIndex]'s own dataset_resubmit
-   *  identity entry, carrying the rest of the current envelope's entries
-   *  forward unchanged. Not called by the UI today (editSlot/editDonor/
-   *  chooseSpec cover every edit surface); kept as a transport-agnostic
-   *  direct-identity resubmit. No-ops when partIndex isn't currently
-   *  definite, or while any part hasn't settled. */
-  resubmit: (partIndex: number, identity: BaseIdentity) => Promise<void>;
   /** rebind one slot (by its index in parts[partIndex].spec.slots) and
    *  re-resolve via the dataset door, replacing the whole envelope */
   editSlot: (
@@ -331,8 +323,8 @@ export interface SpecState {
    *  `editOps` map, distinct from the dataset door's single controller): a
    *  no_data/candidates outcome for a single returned part sets this part's
    *  editError rather than replacing it — a raw-text re-ground has no "the
-   *  outcome renders in place" precedent the way a resubmit's identity/
-   *  candidates/placeholder entries do. */
+   *  outcome renders in place" precedent the way a dataset-door edit's
+   *  identity/candidates/placeholder entries do. */
   refineText: (partIndex: number, text: string) => Promise<void>;
   /** step back / forward through the (whole-envelope) history stack */
   undo: () => void;
@@ -739,7 +731,7 @@ export function createSpecStore(transport: SearchTransport = httpTransport) {
   // Operation fencing. A raw-text/spec_id run is whole-store scoped: it
   // supersedes the previous run AND any dataset edit or refine in flight (a
   // fresh query makes every part's prior edit moot). A dataset-door edit
-  // (editSlot/editDonor/chooseSpec/editShared/resubmit) shares ONE
+  // (editSlot/editDonor/chooseSpec/editShared) shares ONE
   // controller: every such edit resubmits the whole envelope, so there is
   // nothing left to fence per part index. refineText keeps its OWN, older
   // per-part fencing (editOps below) since it's a raw_text re-resolve of one
@@ -1727,18 +1719,6 @@ export function createSpecStore(transport: SearchTransport = httpTransport) {
       runSpecId: (specId, queryHint) => {
         lastRun = () => runResolveSpecId(specId, queryHint);
         return lastRun();
-      },
-
-      resubmit: async (partIndex, identity) => {
-        const settled = settledParts();
-        if (!settled) return;
-        if (settled[partIndex]?.status !== "definite") return;
-        const entries = buildEntries(settled, {
-          kind: "edit",
-          index: partIndex,
-          identity,
-        });
-        await runDataset(entries, [partIndex]);
       },
 
       retry: () => (lastRun ? lastRun() : Promise.resolve()),

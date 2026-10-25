@@ -19,7 +19,6 @@ import {
   normalizeResponse,
   type BaseIdentity,
   type DatasetResubmitEntry,
-  type RemovedParts,
   type ResolveOptions,
   type ResolveRequest,
   type ResolveResponse,
@@ -145,8 +144,9 @@ export function keyRef(key: SlotKey): string {
 
 /** True when the shape's where-axis slot is bound to a graph entity (a
  * value ref, or a set with any ref-bearing member): the dev-finance
- * recipient case, where SpecResubmitInput.entity_dcids[0] would otherwise
- * silently override the where-slot's own binding on resubmit. */
+ * recipient case, where a flat top-level `entity_dcids[0]` field would
+ * otherwise silently override the where-slot's own binding on a
+ * dataset_resubmit edit. */
 export function whereSlotHasEntity(slots: any[]): boolean {
   const slot = (slots ?? []).find((s) => s?.key?.axis === "where");
   const b = slot?.binding;
@@ -167,9 +167,9 @@ export function currentDonorDcid(entities: any[]): string | null {
 }
 
 /**
- * Contract v1: a resubmit posts the complete edited `identity` plus
- * `base_spec_id`/`base_identity` (the prior spec being edited, verified by
- * hash) and, for a standard shape, `resolved_stat_var_dcids` (a sibling of
+ * Contract v1: a dataset_resubmit entry posts the complete edited `identity`
+ * plus `base_spec_id`/`base_identity` (the prior spec being edited, verified
+ * by hash) and, for a standard shape, `resolved_stat_var_dcids` (a sibling of
  * `identity`, not a member — pure graph state, never hashed into spec_id).
  * `extra="forbid"` on the wire rejects any top-level `shape`/`slots`/
  * `shape_id`/`donor_dcid`/`entity_dcids`/`requested_window` field outside
@@ -180,18 +180,6 @@ export function currentDonorDcid(entities: any[]): string | null {
 export type SearchInput =
   | { kind: "raw_text"; query: string }
   | { kind: "spec_id"; spec_id: string }
-  | {
-      kind: "spec_resubmit";
-      identity: BaseIdentity;
-      /** the base spec this edit applies to, or the candidate spec_id being
-       *  promoted — verified by hash against base_identity */
-      base_spec_id?: string;
-      /** the base's full identity, verified by hash against base_spec_id;
-       *  required alongside base_spec_id */
-      base_identity?: BaseIdentity;
-      removed?: RemovedParts;
-      resolved_stat_var_dcids?: string[];
-    }
   | {
       /** dataset_resubmit: every part of the current envelope at once (dfo-
        *  apis #593/#606). `entries` is 1 to 6, in response part order;

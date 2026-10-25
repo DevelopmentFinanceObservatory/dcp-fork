@@ -42,9 +42,6 @@ vi.mock("./lib/store", () => {
       }
       return partsDefiniteKenya as unknown as ResolveResponse;
     }
-    async resubmit(): Promise<never> {
-      throw new Error("unused");
-    }
   }
   return { useSpecStore: createSpecStore(new StubTransport()) };
 });

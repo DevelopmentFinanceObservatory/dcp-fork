@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { HttpTransport } from "./HttpTransport";
 import { normalizeResponse, type BaseIdentity } from "@/lib/contract/types";
 
-/** Minimal identity for resubmit() request-body assertions. */
+/** Minimal identity for resubmitDataset()/resubmitDatasetStream() request-body assertions. */
 function identity(over: Partial<BaseIdentity> = {}): BaseIdentity {
   return {
     identity_version: "spec1",
@@ -101,59 +101,6 @@ describe("HttpTransport", () => {
     });
 
     expect(res).toEqual(normalizeResponse(definiteBody));
-  });
-
-  it("resubmit() POSTs a spec_resubmit request with the nested identity", async () => {
-    const fetchMock = mockFetchOnce(definiteBody);
-    const posted = identity();
-    await new HttpTransport().resubmit(posted);
-
-    const body = sentBody(fetchMock);
-    expect(body.input.kind).toBe("spec_resubmit");
-    expect(body.input.identity).toEqual(posted);
-    expect("shape" in body.input).toBe(false);
-    expect("slots" in body.input).toBe(false);
-    expect("shape_id" in body.input).toBe(false);
-    // resubmit shares HttpTransport's requestOptions, so it also gets
-    // include_observations -- the where-editor resubmit path re-renders
-    // DataPreview off the fresh Spec.observations same as any other resolve.
-    expect(body.response_options).toEqual({
-      include_sentence: true,
-      include_option_coverage: true,
-      include_observations: true,
-    });
-  });
-
-  it("resubmit() includes promote fields when provided", async () => {
-    const fetchMock = mockFetchOnce(definiteBody);
-    const baseIdentity = identity({
-      entities: { observationAbout: ["country/NGA"] },
-    });
-    await new HttpTransport().resubmit(identity(), {
-      resolved_stat_var_dcids: ["sv/1"],
-      base_spec_id: "spec_prior",
-      base_identity: baseIdentity,
-      removed: { entities: ["observationAbout"] },
-    });
-    const input = sentBody(fetchMock).input;
-    expect(input.resolved_stat_var_dcids).toEqual(["sv/1"]);
-    expect(input.base_spec_id).toBe("spec_prior");
-    expect(input.base_identity).toEqual(baseIdentity);
-    expect(input.removed).toEqual({
-      entities: ["observationAbout"],
-    });
-  });
-
-  it("resubmit() omits empty promote fields from the body", async () => {
-    const fetchMock = mockFetchOnce(definiteBody);
-    await new HttpTransport().resubmit(identity(), {
-      resolved_stat_var_dcids: [],
-    });
-    const input = sentBody(fetchMock).input;
-    expect("resolved_stat_var_dcids" in input).toBe(false);
-    expect("base_spec_id" in input).toBe(false);
-    expect("base_identity" in input).toBe(false);
-    expect("removed" in input).toBe(false);
   });
 
   it("can disable option coverage", async () => {
@@ -260,84 +207,6 @@ describe("HttpTransport", () => {
       kind: "response",
       response: normalizeResponse({ status: "definite" }),
     });
-  });
-
-  it("resubmitStream() POSTs a spec_resubmit request and parses SSE frames into events", async () => {
-    const frames =
-      'event: response\ndata: {"kind":"response","response":{"status":"definite"}}\n\n' +
-      'event: slot_options\ndata: {"kind":"slot_options","spec_id":"s1","key":{"axis":"who","property":null,"label":""},"options":[],"complete":true}\n\n';
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(frames));
-        controller.close();
-      },
-    });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      headers: { get: () => "text/event-stream" },
-      body: stream,
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const posted = identity({ entities: { destination: ["country/ETH"] } });
-    const events: unknown[] = [];
-    await new HttpTransport().resubmitStream(posted, undefined, (ev) =>
-      events.push(ev),
-    );
-
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/api/search/resolve");
-    expect(init.headers.Accept).toBe("text/event-stream");
-    const body = sentBody(fetchMock);
-    expect(body.input.kind).toBe("spec_resubmit");
-    expect(body.input.identity).toEqual(posted);
-
-    expect(events).toContainEqual({
-      kind: "response",
-      response: normalizeResponse({ status: "definite" }),
-    });
-    expect(events).toContainEqual(
-      expect.objectContaining({ kind: "slot_options", spec_id: "s1" }),
-    );
-  });
-
-  it("resubmitStream() includes promote fields when provided", async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode(
-            'event: response\ndata: {"kind":"response","response":{}}\n\n',
-          ),
-        );
-        controller.close();
-      },
-    });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      headers: { get: () => "text/event-stream" },
-      body: stream,
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const baseIdentity = identity({
-      entities: { observationAbout: ["country/NGA"] },
-    });
-    await new HttpTransport().resubmitStream(
-      identity(),
-      {
-        resolved_stat_var_dcids: ["sv/1"],
-        base_spec_id: "spec_prior",
-        base_identity: baseIdentity,
-      },
-      () => {},
-    );
-
-    const input = sentBody(fetchMock).input;
-    expect(input.resolved_stat_var_dcids).toEqual(["sv/1"]);
-    expect(input.base_spec_id).toBe("spec_prior");
-    expect(input.base_identity).toEqual(baseIdentity);
   });
 
   it("resubmitDataset() POSTs a dataset_resubmit request with the entries list", async () => {

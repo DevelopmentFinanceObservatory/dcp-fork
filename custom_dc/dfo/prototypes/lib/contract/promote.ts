@@ -1,5 +1,7 @@
 /**
- * Promote fields and identity-edit helpers for `spec_resubmit`.
+ * Promote fields and identity-edit helpers for a `dataset_resubmit` entry's
+ * `identity` kind (also fed into a `candidates` entry's own candidate
+ * identities — see `DatasetCandidateEntry`).
  *
  * Contract v1: a resubmit posts `identity` — the complete edited
  * `BaseIdentity` — plus `base_spec_id`/`base_identity` (the prior spec being
@@ -50,11 +52,11 @@ export interface PromoteFields {
   removed?: RemovedParts;
 }
 
-/** Derive the promote fields for a spec_resubmit of `spec`: the sibling
- *  fields that ride alongside `identity`, not inside it. base_spec_id/
- *  base_identity attach whenever the spec carries a hashed identity
- *  (definition.identity) — verified by hash server-side against whatever
- *  identity is actually posted. */
+/** Derive the promote fields for a dataset_resubmit `identity` entry of
+ *  `spec`: the sibling fields that ride alongside `identity`, not inside it.
+ *  base_spec_id/base_identity attach whenever the spec carries a hashed
+ *  identity (definition.identity) — verified by hash server-side against
+ *  whatever identity is actually posted. */
 export function promoteFromSpec(spec: Spec): PromoteFields {
   const out: PromoteFields = {};
 

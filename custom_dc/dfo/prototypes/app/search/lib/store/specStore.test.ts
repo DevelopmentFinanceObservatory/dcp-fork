@@ -28,21 +28,38 @@ import {
 import { definite, diagnostics, echo } from "../fixtures/_common";
 
 /**
- * Every test transport below expresses its edit double as `resubmit`
- * (spec_resubmit, one part) -- the shape editSlot/editDonor/chooseSpec/
- * resubmit() post through. Wrapping every transport through this (via the
- * local `createSpecStore` shadow below) derives `resubmitDataset`
- * automatically for the single-part envelope every test in this file posts
- * EXCEPT the "parts[] envelope" and "editShared()" describe blocks, which edit a
- * multi-part envelope and so supply their own `resubmitDataset` (this
- * wrapper only fills the gap when one isn't already given, and only ever
- * unwraps a single identity entry -- a multi-entry `entries[]` reaching it
- * throws loudly, so a test that needed its own resubmitDataset and didn't
- * get one fails clearly rather than posting the wrong thing).
+ * An `identityEdit`-shaped edit double: not part of SearchTransport (dfo-apis
+ * retired the spec_resubmit request kind and no store action ever posted
+ * it), but kept here purely as test-authoring shorthand. withDatasetDoor
+ * below translates it into a `resubmitDataset` single-entry post, so a test
+ * exercising editSlot/editDonor/chooseSpec can say "this edit resolves to
+ * X" once, keyed on the edited identity, instead of hand-building the
+ * entries[]-shaped resubmitDataset stub every time.
  */
-function withDatasetDoor(transport: SearchTransport): SearchTransport {
-  if (transport.resubmitDataset || !transport.resubmit) return transport;
-  const resubmit = transport.resubmit;
+type TestTransport = SearchTransport & {
+  identityEdit?: (
+    identity: BaseIdentity,
+    promote?: PromoteFields,
+    signal?: AbortSignal,
+  ) => Promise<ResolveResponse>;
+};
+
+/**
+ * Every test transport below expresses its edit double as `identityEdit`
+ * (one part) -- the shape editSlot/editDonor/chooseSpec post through.
+ * Wrapping every transport through this (via the local `createSpecStore`
+ * shadow below) derives `resubmitDataset` automatically for the
+ * single-part envelope every test in this file posts EXCEPT the "parts[]
+ * envelope" and "editShared()" describe blocks, which edit a multi-part
+ * envelope and so supply their own `resubmitDataset` (this wrapper only
+ * fills the gap when one isn't already given, and only ever unwraps a
+ * single identity entry -- a multi-entry `entries[]` reaching it throws
+ * loudly, so a test that needed its own resubmitDataset and didn't get one
+ * fails clearly rather than posting the wrong thing).
+ */
+function withDatasetDoor(transport: TestTransport): SearchTransport {
+  if (transport.resubmitDataset || !transport.identityEdit) return transport;
+  const identityEdit = transport.identityEdit;
   return {
     ...transport,
     resubmitDataset: (entries, _rawQuery, signal) => {
@@ -58,12 +75,12 @@ function withDatasetDoor(transport: SearchTransport): SearchTransport {
         removed: entry.removed,
         resolved_stat_var_dcids: entry.resolved_stat_var_dcids,
       };
-      return resubmit(entry.identity, promote, signal);
+      return identityEdit(entry.identity, promote, signal);
     },
   };
 }
 
-function createSpecStore(transport: SearchTransport) {
+function createSpecStore(transport: TestTransport) {
   return createSpecStoreImpl(withDatasetDoor(transport));
 }
 
@@ -210,12 +227,12 @@ function withEditedIdentity(
 }
 
 /** A stub transport for the "happy path" tests: resolve() looks up a canned
- *  response by exact query text, resubmit() applies the edited identity onto
+ *  response by exact query text, identityEdit() applies the edited identity onto
  *  definiteBreadthSpec (the only shape any freshStore() test edits). */
 function freshStore() {
-  const transport: SearchTransport = {
+  const transport: TestTransport = {
     resolve: (query) => resolveByQuery(query),
-    resubmit: (identity) =>
+    identityEdit: (identity) =>
       Promise.resolve(withEditedIdentity(definiteBreadthSpec, identity)),
   };
   // A dedicated transport instance per store keeps tests isolated.
@@ -225,18 +242,18 @@ function freshStore() {
 /** A resolveStream double the test drives by hand: onEvent captures the store's
  *  event handler and the returned promise doesn't settle until finish() is
  *  called — so assertions can run mid-stream, before the simulated request
- *  "completes". resolve()/resubmit() are stubbed to the same fallback response;
+ *  "completes". resolve()/identityEdit() are stubbed to the same fallback response;
  *  the tests that use this never exercise the buffered path. */
 function manualStreamTransport(fallback: ResolveResponse): {
-  transport: SearchTransport;
+  transport: TestTransport;
   emit: (ev: SearchEvent) => void;
   finish: () => void;
 } {
   let onEvent: (ev: SearchEvent) => void = () => {};
   let settle: () => void = () => {};
-  const transport: SearchTransport = {
+  const transport: TestTransport = {
     resolve: () => Promise.resolve(fallback),
-    resubmit: () => Promise.resolve(fallback),
+    identityEdit: () => Promise.resolve(fallback),
     resolveStream: (_query, cb) => {
       onEvent = cb;
       return new Promise<void>((resolve) => {
@@ -253,10 +270,10 @@ function manualStreamTransport(fallback: ResolveResponse): {
  *  call, 1 = a superseding second call, ...) so a test can drive overlapping
  *  edit-streams independently. resolve() seeds a spec to edit (every caller
  *  resolves a single-part query first, so the posted `entries[]` is always
- *  one entry); the buffered resubmit()/resubmitDataset() paths are never
+ *  one entry); the buffered identityEdit()/resubmitDataset() paths are never
  *  exercised by these tests. */
 function manualResubmitStreamTransport(): {
-  transport: SearchTransport;
+  transport: TestTransport;
   calls: {
     emit: (ev: SearchEvent) => void;
     finish: () => void;
@@ -268,11 +285,11 @@ function manualResubmitStreamTransport(): {
     finish: () => void;
     signal?: AbortSignal;
   }[] = [];
-  const transport: SearchTransport = {
+  const transport: TestTransport = {
     resolve: (query) => resolveByQuery(query),
-    resubmit: () =>
+    identityEdit: () =>
       Promise.reject(
-        new Error("buffered resubmit should not be called in a streaming test"),
+        new Error("buffered identityEdit should not be called in a streaming test"),
       ),
     resubmitDatasetStream: (_entries, _rawQuery, cb, signal) =>
       new Promise<void>((resolve) => {
@@ -323,12 +340,11 @@ describe("specStore", () => {
     expect(s.parts[0].part?.status).toBe("no_data");
   });
 
-  // A bare resubmit()/chooseSpec() against an idle store has no committed
-  // parts to build a dataset_resubmit entries[] list from: every
-  // dataset-door edit needs the whole current envelope to post entries for,
-  // not a self-contained single-part payload the way spec_resubmit is. The
-  // next test already exercises chooseSpec() against a real committed
-  // candidates part, with its own posted-fields assertions.
+  // A bare chooseSpec() against an idle store has no committed parts to
+  // build a dataset_resubmit entries[] list from: every dataset-door edit
+  // needs the whole current envelope to post entries for. The next test
+  // already exercises chooseSpec() against a real committed candidates
+  // part, with its own posted-fields assertions.
 
   it("chooseSpec() splices the candidate into parts[0] after a prior resolve", async () => {
     const captured: {
@@ -337,7 +353,7 @@ describe("specStore", () => {
     } = {};
     const store = createSpecStore({
       resolve: () => Promise.resolve(candidates),
-      resubmit: (identity, promote) => {
+      identityEdit: (identity, promote) => {
         captured.identity = identity;
         captured.promote = promote;
         return Promise.resolve(definiteExact);
@@ -374,9 +390,9 @@ describe("specStore", () => {
         },
       },
     };
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => Promise.resolve(candidates),
-      resubmit: (identity) => {
+      identityEdit: (identity) => {
         captured = identity;
         return Promise.resolve(definiteExact);
       },
@@ -393,9 +409,9 @@ describe("specStore", () => {
   });
 
   it("surfaces a transport failure as the run-level error state", async () => {
-    const throwing: SearchTransport = {
+    const throwing: TestTransport = {
       resolve: () => Promise.reject(new Error("boom")),
-      resubmit: () => Promise.reject(new Error("boom")),
+      identityEdit: () => Promise.reject(new Error("boom")),
     };
     const store = createSpecStore(throwing);
     await store.getState().resolve("anything");
@@ -442,9 +458,9 @@ describe("specStore", () => {
       echo({ raw_query: "women in Kenya", variable_text: ["female persons"] }),
     );
     let captured: PromoteFields | undefined;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => Promise.resolve(canned),
-      resubmit: (_identity, promote) => {
+      identityEdit: (_identity, promote) => {
         captured = promote;
         return Promise.resolve(canned);
       },
@@ -464,10 +480,8 @@ describe("specStore", () => {
   });
 
   it("resolve() streams pipeline steps + real detail and commits the final response", async () => {
-    const streaming: SearchTransport = {
+    const streaming: TestTransport = {
       resolve: (query) => resolveByQuery(query),
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
       resolveStream: async (query, onEvent) => {
         onEvent({
           kind: "interpretation",
@@ -537,10 +551,8 @@ describe("specStore", () => {
   });
 
   it("resolve() surfaces a streamed error event as the run-level error state", async () => {
-    const streaming: SearchTransport = {
+    const streaming: TestTransport = {
       resolve: () => Promise.reject(new Error("resolve not used in this test")),
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
       resolveStream: async (_q, onEvent) => {
         onEvent({ kind: "error", detail: "upstream exploded", code: null });
       },
@@ -556,9 +568,9 @@ describe("specStore", () => {
       identity: BaseIdentity;
       promote?: PromoteFields;
     } | null = null;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => Promise.resolve(definiteBreadth),
-      resubmit: (identity, promote) => {
+      identityEdit: (identity, promote) => {
         captured = { identity, promote };
         return Promise.resolve(
           withEditedIdentity(definiteBreadthSpec, identity),
@@ -601,9 +613,9 @@ describe("specStore", () => {
       echo({ raw_query: "x", variable_text: [] }),
     );
     let captured: BaseIdentity | undefined;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => Promise.resolve(canned),
-      resubmit: (identity) => {
+      identityEdit: (identity) => {
         captured = identity;
         return Promise.resolve(canned);
       },
@@ -663,9 +675,9 @@ describe("specStore", () => {
       echo({ raw_query: "world population", variable_text: ["population"] }),
     );
     let captured: BaseIdentity | undefined;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => Promise.resolve(canned),
-      resubmit: (identity) => {
+      identityEdit: (identity) => {
         captured = identity;
         return Promise.resolve(canned);
       },
@@ -758,8 +770,6 @@ describe("specStore", () => {
             )
           : Promise.resolve(definiteBreadth);
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     });
     await store.getState().resolve("flaky malaria demo");
     expect(store.getState().status).toBe("error");
@@ -772,8 +782,6 @@ describe("specStore", () => {
     const store = createSpecStore({
       resolve: () =>
         Promise.reject(new Error("The engine could not be reached.")),
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     });
     await store.getState().resolve("boom please");
     expect(store.getState().status).toBe("error");
@@ -781,9 +789,9 @@ describe("specStore", () => {
   });
 
   it("editSlot() rolls back to the snapshot when the transport fails, setting parts[0].editError (not a run-level error)", async () => {
-    const flaky: SearchTransport = {
+    const flaky: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: () => Promise.reject(new Error("edit failed")),
+      identityEdit: () => Promise.reject(new Error("edit failed")),
     };
     const store = createSpecStore(flaky);
     await store.getState().resolve("women in Kenya");
@@ -823,10 +831,8 @@ describe("specStore", () => {
       },
       diagnostics: { engine_build: "test", warnings: [] },
     };
-    const guard: SearchTransport = {
+    const guard: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
       resubmitDataset: () => Promise.resolve(noDataResponse), // the edit resolves to no_data
     };
     const store = createSpecStore(guard);
@@ -848,12 +854,12 @@ describe("specStore", () => {
   });
 
   it("editSlot() clears a stale editError as soon as a new edit on that part starts", async () => {
-    let resubmitCalls = 0;
-    const spy: SearchTransport = {
+    let identityEditCalls = 0;
+    const spy: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: (identity) => {
-        resubmitCalls += 1;
-        if (resubmitCalls === 1)
+      identityEdit: (identity) => {
+        identityEditCalls += 1;
+        if (identityEditCalls === 1)
           return Promise.reject(new Error("first edit failed"));
         return Promise.resolve(withEditedIdentity(definiteExactSpec, identity));
       },
@@ -1039,7 +1045,7 @@ describe("specStore", () => {
     let calls = 0;
     // buffered-only (no resolveStream): the first call hangs until released,
     // the second resolves immediately to a different fixture.
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => {
         calls += 1;
         if (calls === 1) {
@@ -1049,7 +1055,7 @@ describe("specStore", () => {
         }
         return Promise.resolve(second);
       },
-      resubmit: () => Promise.resolve(second),
+      identityEdit: () => Promise.resolve(second),
     };
     const store = createSpecStore(transport);
 
@@ -1069,9 +1075,9 @@ describe("specStore", () => {
 
   it("a raw-text resolve() aborts an edit in flight on any part", async () => {
     let editSignal: AbortSignal | undefined;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: (_identity, _promote, signal) => {
+      identityEdit: (_identity, _promote, signal) => {
         editSignal = signal;
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
@@ -1089,14 +1095,12 @@ describe("specStore", () => {
 
   it("cancel() during loading restores the last committed result", async () => {
     let calls = 0;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => {
         calls += 1;
         if (calls === 1) return Promise.resolve(definiteExact);
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
     await store.getState().resolve("women in Kenya");
@@ -1114,14 +1118,12 @@ describe("specStore", () => {
 
   it("cancel() during loading restores the queryText of the last committed result", async () => {
     let calls = 0;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => {
         calls += 1;
         if (calls === 1) return Promise.resolve(definiteExact);
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
     await store.getState().resolve("women in Kenya");
@@ -1135,9 +1137,9 @@ describe("specStore", () => {
   });
 
   it("cancel() with no prior result returns to idle", () => {
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => new Promise<ResolveResponse>(() => {}), // hangs
-      resubmit: () => new Promise<ResolveResponse>(() => {}),
+      identityEdit: () => new Promise<ResolveResponse>(() => {}),
     };
     const store = createSpecStore(transport);
 
@@ -1151,9 +1153,9 @@ describe("specStore", () => {
   it("editSlot() sets editPending to the part index while in flight and clears it after", async () => {
     const definiteResponse = definiteExact;
     let release!: (v: ResolveResponse) => void;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: () =>
+      identityEdit: () =>
         new Promise<ResolveResponse>((resolve) => {
           release = resolve;
         }),
@@ -1232,9 +1234,9 @@ describe("specStore", () => {
   });
 
   it("cancel() during a pending edit restores the pre-edit result and clears editPending", async () => {
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: () => new Promise<ResolveResponse>(() => {}), // hangs
+      identityEdit: () => new Promise<ResolveResponse>(() => {}), // hangs
     };
     const store = createSpecStore(transport);
     await store.getState().resolve("women in Kenya");
@@ -1254,14 +1256,12 @@ describe("specStore", () => {
 
   it("undo() during an in-flight resolve cancels in place first, then steps the pointer on a second call", async () => {
     let calls = 0;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: (query) => {
         calls += 1;
         if (calls <= 2) return resolveByQuery(query); // seed two committed results
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
     await store.getState().resolve("women in Kenya");
@@ -1282,14 +1282,12 @@ describe("specStore", () => {
 
   it("redo() during an in-flight resolve cancels in place first, then steps the pointer on a second call", async () => {
     let calls = 0;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: (query) => {
         calls += 1;
         if (calls <= 2) return resolveByQuery(query); // seed two committed results
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
     await store.getState().resolve("women in Kenya");
@@ -1312,12 +1310,12 @@ describe("specStore", () => {
   });
 
   it("undo() during a pending edit cancels in place first, then steps the pointer on a second call", async () => {
-    let resubmitCalls = 0;
-    const transport: SearchTransport = {
+    let identityEditCalls = 0;
+    const transport: TestTransport = {
       resolve: () => Promise.resolve(definiteBreadth),
-      resubmit: (identity) => {
-        resubmitCalls += 1;
-        if (resubmitCalls === 1)
+      identityEdit: (identity) => {
+        identityEditCalls += 1;
+        if (identityEditCalls === 1)
           return Promise.resolve(
             withEditedIdentity(definiteBreadthSpec, identity),
           );
@@ -1353,12 +1351,12 @@ describe("specStore", () => {
   });
 
   it("redo() during a pending edit cancels in place first, then steps the pointer on a second call", async () => {
-    let resubmitCalls = 0;
-    const transport: SearchTransport = {
+    let identityEditCalls = 0;
+    const transport: TestTransport = {
       resolve: () => Promise.resolve(definiteBreadth),
-      resubmit: (identity) => {
-        resubmitCalls += 1;
-        if (resubmitCalls === 1)
+      identityEdit: (identity) => {
+        identityEditCalls += 1;
+        if (identityEditCalls === 1)
           return Promise.resolve(
             withEditedIdentity(definiteBreadthSpec, identity),
           );
@@ -1385,7 +1383,7 @@ describe("specStore", () => {
         value_kind: "entity",
         ref: { dcid: "country/KEN", label: "Kenya" },
       },
-    }); // fire, don't await: it never settles (the 2nd resubmit call)
+    }); // fire, don't await: it never settles (the 2nd identityEdit call)
     expect(store.getState().editPending).toBe(0);
 
     store.getState().redo(); // first call: cancel the pending edit in place
@@ -1508,13 +1506,11 @@ describe("specStore", () => {
 
   it("resolve() caches a byte-identical repeat query and skips the transport on the second call", async () => {
     let calls = 0;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => {
         calls += 1;
         return Promise.resolve(definiteExact);
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(spy);
     await store.getState().resolve("women in Kenya");
@@ -1528,13 +1524,11 @@ describe("specStore", () => {
 
   it("resolve() of a query not yet seen populates the cache (a miss reaches the transport)", async () => {
     let calls = 0;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: (query) => {
         calls += 1;
         return resolveByQuery(query);
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(spy);
     await store.getState().resolve("women in Kenya");
@@ -1544,12 +1538,12 @@ describe("specStore", () => {
 
   it("an edit does not poison the resolve() cache for the original query", async () => {
     let resolveCalls = 0;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => {
         resolveCalls += 1;
         return Promise.resolve(definiteExact);
       },
-      resubmit: (identity) =>
+      identityEdit: (identity) =>
         Promise.resolve(withEditedIdentity(definiteExactSpec, identity)),
     };
     const store = createSpecStore(spy);
@@ -1573,13 +1567,11 @@ describe("specStore", () => {
 
   it("reset() clears the resolve() cache", async () => {
     let resolveCalls = 0;
-    const spy: SearchTransport = {
+    const spy: TestTransport = {
       resolve: () => {
         resolveCalls += 1;
         return Promise.resolve(definiteExact);
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(spy);
     await store.getState().resolve("women in Kenya");
@@ -1592,7 +1584,7 @@ describe("specStore", () => {
   it("a superseding resolve() aborts the signal of the request it replaces", async () => {
     let calls = 0;
     let firstSignal: AbortSignal | undefined;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: (_query, signal) => {
         calls += 1;
         if (calls === 1) {
@@ -1601,8 +1593,6 @@ describe("specStore", () => {
         }
         return Promise.resolve(noData);
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
 
@@ -1616,15 +1606,13 @@ describe("specStore", () => {
   it("cancel() aborts the in-flight request signal", async () => {
     let calls = 0;
     let signal: AbortSignal | undefined;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: (_query, s) => {
         calls += 1;
         if (calls === 1) return Promise.resolve(definiteExact);
         signal = s;
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
     await store.getState().resolve("women in Kenya");
@@ -1638,9 +1626,9 @@ describe("specStore", () => {
 
   it("undo() during an in-flight edit aborts the pending request signal", async () => {
     let signal: AbortSignal | undefined;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: () => Promise.resolve(definiteExact),
-      resubmit: (_identity, _promote, s) => {
+      identityEdit: (_identity, _promote, s) => {
         signal = s;
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
@@ -1657,13 +1645,11 @@ describe("specStore", () => {
 
   it("reset() aborts the in-flight request signal", async () => {
     let signal: AbortSignal | undefined;
-    const transport: SearchTransport = {
+    const transport: TestTransport = {
       resolve: (_query, s) => {
         signal = s;
         return new Promise<ResolveResponse>(() => {}); // hangs
       },
-      resubmit: () =>
-        Promise.reject(new Error("resubmit not used in this test")),
     };
     const store = createSpecStore(transport);
     store.getState().resolve("anything"); // fire, don't await: it never settles
@@ -1673,7 +1659,7 @@ describe("specStore", () => {
     expect(signal?.aborted).toBe(true);
   });
 
-  describe("editSlot()/editDonor() with a streaming transport (resubmitStream)", () => {
+  describe("editSlot()/editDonor() with a streaming transport (resubmitDatasetStream)", () => {
     it("commits the moment the response event arrives, before the edit stream ends", async () => {
       const { transport, calls } = manualResubmitStreamTransport();
       const store = createSpecStore(transport);
@@ -2024,7 +2010,7 @@ describe("specStore", () => {
       expect(store.getState().parts[0].spec?.spec_id).toBe(before.spec_id);
     });
 
-    it("editDonor() also streams via resubmitStream, committing on the response event", async () => {
+    it("editDonor() also streams via resubmitDatasetStream, committing on the response event", async () => {
       const { transport, calls } = manualResubmitStreamTransport();
       const store = createSpecStore(transport);
       await store.getState().resolve("malaria grants to Ethiopia");
@@ -2049,7 +2035,6 @@ describe("specStore", () => {
     it("resolves an existing spec_id buffered and transitions status loading -> ready", async () => {
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("unused")),
-        resubmit: () => Promise.reject(new Error("unused")),
         resolveSpecId: (specId) => {
           expect(specId).toBe(definiteExactSpec.spec_id);
           return Promise.resolve(definiteExact);
@@ -2071,7 +2056,6 @@ describe("specStore", () => {
     it("sets queryText to queryHint when provided", async () => {
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("unused")),
-        resubmit: () => Promise.reject(new Error("unused")),
         resolveSpecId: () => Promise.resolve(definiteExact),
       });
 
@@ -2088,9 +2072,8 @@ describe("specStore", () => {
       let onEventCb: (ev: SearchEvent) => void = () => {};
       let settleStream: () => void = () => {};
 
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () => Promise.reject(new Error("unused")),
-        resubmit: () => Promise.reject(new Error("unused")),
         resolveSpecIdStream: (specId, cb) => {
           expect(specId).toBe(definiteBreadthSpec.spec_id);
           onEventCb = cb;
@@ -2140,7 +2123,6 @@ describe("specStore", () => {
       let callCount = 0;
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("unused")),
-        resubmit: () => Promise.reject(new Error("unused")),
         resolveSpecId: () => {
           callCount += 1;
           return Promise.resolve(definiteExact);
@@ -2160,7 +2142,6 @@ describe("specStore", () => {
       let attempts = 0;
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("unused")),
-        resubmit: () => Promise.reject(new Error("unused")),
         resolveSpecId: () => {
           attempts += 1;
           if (attempts === 1) {
@@ -2190,11 +2171,9 @@ describe("specStore", () => {
   // normalizeResponse directly.
   describe("parts[] envelope", () => {
     it("resolve() streams a parts[]-envelope definite response and commits it", async () => {
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: partsDefiniteKenya });
         },
@@ -2213,11 +2192,9 @@ describe("specStore", () => {
     });
 
     it("resolve() streams a parts[]-envelope candidates response and commits it", async () => {
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: partsCandidatesNigeria });
         },
@@ -2281,11 +2258,9 @@ describe("specStore", () => {
         "spec_567bf6828e3cc23c7d70e121cc36f2f9",
       );
 
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: alreadyNormalized });
         },
@@ -2325,11 +2300,9 @@ describe("specStore", () => {
           },
         ],
       };
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: unsupportedResponse });
         },
@@ -2365,11 +2338,9 @@ describe("specStore", () => {
           },
         ],
       };
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: unsupportedResponse });
         },
@@ -2394,11 +2365,9 @@ describe("specStore", () => {
         diagnostics: diagnostics(),
         parts: [],
       };
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: emptyPartsResponse });
         },
@@ -2415,11 +2384,9 @@ describe("specStore", () => {
     // --- Multi-part behavior: splice, envelope status, per-part concurrency ---
 
     it("resolve() of a real two-part 'mixed' capture renders both parts in order", async () => {
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({
             kind: "interpretation",
@@ -2460,8 +2427,6 @@ describe("specStore", () => {
       let capturedEntries: DatasetResubmitEntry[] | undefined;
       const store = createSpecStore({
         resolve: () => Promise.resolve(mixed),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: (entries) => {
           capturedEntries = entries;
           return Promise.resolve({
@@ -2530,8 +2495,8 @@ describe("specStore", () => {
       // The candidate the refine "resolves" to, known statically from the
       // fixture -- a refine is a raw_text resolve, so the mock resolve()
       // below just needs to return a plausible single-part definite answer
-      // for the refined text, keyed off it rather than off "spec_resubmit" --
-      // refineText never calls transport.resubmit.
+      // for the refined text: refineText never posts through the dataset
+      // door, so this test's `identityEdit` double is never reached.
       const chosen = (() => {
         const p1 = partAt(normalizeResponse(partsMixedBrazil), 1);
         if (p1?.status !== "candidates") throw new Error("expected candidates");
@@ -2547,8 +2512,6 @@ describe("specStore", () => {
                   echo({ raw_query: query, variable_text: ["nominal GDP"] }),
                 ),
               ),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used by refineText")),
       });
       await store.getState().resolve("population and GDP in Brazil");
       const part0Before = store.getState().parts[0];
@@ -2576,8 +2539,6 @@ describe("specStore", () => {
           query === "population and GDP in Brazil"
             ? Promise.resolve(normalizeResponse(partsMixedBrazil))
             : Promise.resolve(normalizeResponse(partsTwoDefiniteKenya)),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used by refineText")),
       });
       await store.getState().resolve("population and GDP in Brazil");
       const part0Before = store.getState().parts[0];
@@ -2610,8 +2571,6 @@ describe("specStore", () => {
           query === "population and GDP in Brazil"
             ? Promise.resolve(normalizeResponse(partsMixedBrazil))
             : Promise.resolve(noData),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used by refineText")),
       });
       await store.getState().resolve("population and GDP in Brazil");
       const responseBefore = store.getState().response;
@@ -2652,8 +2611,6 @@ describe("specStore", () => {
       })();
       const store = createSpecStore({
         resolve: () => Promise.resolve(mixed),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: (entries) => {
           capturedEntries.push(entries);
           return new Promise<ResolveResponse>((resolve) => {
@@ -2732,8 +2689,6 @@ describe("specStore", () => {
       })();
       const store = createSpecStore({
         resolve: () => Promise.resolve(mixed),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: (_entries, _rawQuery, signal) => {
           call += 1;
           if (call === 1) firstSignal = signal;
@@ -2765,8 +2720,6 @@ describe("specStore", () => {
           query === "population and GDP in Brazil"
             ? Promise.resolve(mixed)
             : new Promise<ResolveResponse>(() => {}), // the refine's own raw_text resolve hangs
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: () =>
           new Promise<ResolveResponse>((resolve) => {
             releaseDataset = resolve;
@@ -2793,8 +2746,6 @@ describe("specStore", () => {
     it("a rejected dataset edit sets editError only on the part(s) the edit targeted, leaving a sibling clean", async () => {
       const store = createSpecStore({
         resolve: () => Promise.resolve(normalizeResponse(partsMixedBrazil)),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: () => Promise.reject(new Error("edit failed")),
       });
       await store.getState().resolve("population and GDP in Brazil");
@@ -2860,7 +2811,7 @@ describe("specStore", () => {
     it("a dataset edit's trailing events search every part, not just the one it targeted", async () => {
       const { transport, calls } = manualResubmitStreamTransport();
       const mixed = normalizeResponse(partsMixedBrazil);
-      const streamingSeed: SearchTransport = {
+      const streamingSeed: TestTransport = {
         ...transport,
         resolveStream: async (_q, onEvent) => {
           onEvent({ kind: "response", response: partsMixedBrazil });
@@ -2914,11 +2865,9 @@ describe("specStore", () => {
     });
 
     it("a real two-definite-part capture (population and total population in Kenya) renders two independent blocks with distinct spec_ids", async () => {
-      const streaming: SearchTransport = {
+      const streaming: TestTransport = {
         resolve: () =>
           Promise.reject(new Error("resolve not used in this test")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resolveStream: async (_query, onEvent) => {
           onEvent({ kind: "response", response: partsTwoDefiniteKenya });
         },
@@ -2948,7 +2897,7 @@ describe("specStore", () => {
           query === "women in Kenya"
             ? Promise.resolve(definiteExact)
             : Promise.resolve(normalizeResponse(partsMixedTwoVariable)),
-        resubmit: (identity) =>
+        identityEdit: (identity) =>
           Promise.resolve(
             withEditedIdentity(
               definiteSpec(normalizeResponse(partsMixedTwoVariable), 0),
@@ -3022,8 +2971,6 @@ describe("specStore", () => {
       };
       const store = createSpecStore({
         resolve: () => Promise.resolve(initialResponse),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: () => Promise.resolve(editedResponse),
       });
       await store
@@ -3088,8 +3035,6 @@ describe("specStore", () => {
       };
       const store = createSpecStore({
         resolve: () => Promise.resolve(initialResponse),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: () => Promise.resolve(mismatchedResponse),
       });
       await store
@@ -3121,8 +3066,6 @@ describe("specStore", () => {
       let capturedEntries: DatasetResubmitEntry[] | undefined;
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("resolve not used")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: (entries) => {
           capturedEntries = entries;
           return Promise.resolve({
@@ -3220,8 +3163,6 @@ describe("specStore", () => {
       let capturedEntries: DatasetResubmitEntry[] | undefined;
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("resolve not used")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: (entries) => {
           capturedEntries = entries;
           return Promise.resolve({
@@ -3349,8 +3290,6 @@ describe("specStore", () => {
       let capturedEntries: DatasetResubmitEntry[] | undefined;
       const store = createSpecStore({
         resolve: () => Promise.reject(new Error("resolve not used")),
-        resubmit: () =>
-          Promise.reject(new Error("resubmit not used in this test")),
         resubmitDataset: (entries) => {
           capturedEntries = entries;
           return Promise.resolve({

@@ -33,7 +33,7 @@ export const definiteExactSpec: Spec = {
     member_count: 25,
     refine_supported: true,
   },
-  // The hashed identity core a spec_resubmit edits against (contract v1).
+  // The hashed identity core a dataset_resubmit edit posts against (contract v1).
   // Subject-only shape: the where-slot binds the plain
   // subject, so it lives at entities.observationAbout. A resolved 'absent'
   // binding (age) has no identity-core equivalent and maps to 'unbound'.

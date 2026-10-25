@@ -42,7 +42,7 @@ export const definiteBreadthSpec: Spec = {
     member_count: 412,
     refine_supported: true,
   },
-  // The hashed identity core a spec_resubmit edits against (contract v1).
+  // The hashed identity core a dataset_resubmit edit posts against (contract v1).
   // what/how slots only (where/when/source live in
   // entities/requested_window/facets, not identity.slots); a resolved
   // 'absent' binding (channel) has no identity-core equivalent, so it maps

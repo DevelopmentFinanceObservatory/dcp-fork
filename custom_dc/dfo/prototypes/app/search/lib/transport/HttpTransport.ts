@@ -10,14 +10,12 @@
  */
 
 import type {
-  BaseIdentity,
   DatasetResubmitEntry,
   PlaceOptionsRequest,
   PlaceOptionsResponse,
   ResolveOptions,
   ResolveResponse,
 } from "@/lib/contract/types";
-import type { PromoteFields } from "@/lib/contract/promote";
 import {
   buildRequest,
   placeOptions as searchPlaceOptions,
@@ -28,28 +26,9 @@ import {
 } from "@/lib/client/searchClient";
 import type { SearchTransport } from "./SearchTransport";
 
-/** Shared spec_resubmit field mapping for resubmit()/resubmitStream(). Promote
- *  fields spread in only when non-empty, so an unpromoted edit doesn't send
- *  stray nulls the engine would otherwise have to ignore. */
-function resubmitInput(
-  identity: BaseIdentity,
-  promote?: PromoteFields,
-): SearchInput {
-  return {
-    kind: "spec_resubmit",
-    identity,
-    ...(promote?.base_spec_id ? { base_spec_id: promote.base_spec_id } : {}),
-    ...(promote?.base_identity ? { base_identity: promote.base_identity } : {}),
-    ...(promote?.removed ? { removed: promote.removed } : {}),
-    ...(promote?.resolved_stat_var_dcids?.length
-      ? { resolved_stat_var_dcids: promote.resolved_stat_var_dcids }
-      : {}),
-  };
-}
-
 /** Shared dataset_resubmit field mapping for resubmitDataset()/
- *  resubmitDatasetStream(). `raw_query` omitted when absent, same
- *  spread-only-when-present convention as resubmitInput. */
+ *  resubmitDatasetStream(). `raw_query` omitted when absent, spread in only
+ *  when present. */
 function resubmitDatasetInput(
   entries: DatasetResubmitEntry[],
   rawQuery?: string,
@@ -80,7 +59,7 @@ export class HttpTransport implements SearchTransport {
       include_option_coverage:
         includeOptionCoverage ?? options.include_option_coverage ?? true,
       // DataPreview (app/search/components/DataPreview.tsx) renders off
-      // Spec.observations, so every resolve/resubmit needs the engine to
+      // Spec.observations, so every resolve/edit needs the engine to
       // populate it -- either inline on the buffered path or via the
       // trailing 'observations' SSE event the store's applyObservations
       // already handles. Absent this flag the engine omits observations
@@ -141,30 +120,6 @@ export class HttpTransport implements SearchTransport {
     );
   }
 
-  resubmit(
-    identity: BaseIdentity,
-    promote?: PromoteFields,
-    signal?: AbortSignal,
-  ): Promise<ResolveResponse> {
-    return this.run(resubmitInput(identity, promote), signal);
-  }
-
-  /** Streaming resubmit using identical request/field mapping as resubmit(), routed
-   *  through the same SSE parser resolveStream uses, because the unified endpoint
-   *  content-negotiates spec_resubmit inputs the same way it does raw_text. */
-  resubmitStream(
-    identity: BaseIdentity,
-    promote: PromoteFields | undefined,
-    onEvent: (event: SearchEvent) => void,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    return searchResolveStream(
-      buildRequest(resubmitInput(identity, promote), this.requestOptions),
-      onEvent,
-      signal,
-    );
-  }
-
   resubmitDataset(
     entries: DatasetResubmitEntry[],
     rawQuery: string | undefined,
@@ -174,8 +129,8 @@ export class HttpTransport implements SearchTransport {
   }
 
   /** Streaming resubmitDataset, same request/field mapping as
-   *  resubmitDataset(), routed through the same SSE parser resolveStream/
-   *  resubmitStream use. */
+   *  resubmitDataset(), routed through the same SSE parser resolveStream
+   *  uses. */
   resubmitDatasetStream(
     entries: DatasetResubmitEntry[],
     rawQuery: string | undefined,

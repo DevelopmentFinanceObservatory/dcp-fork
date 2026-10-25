@@ -231,8 +231,8 @@ vi.mock("./lib/store", () => {
     ],
   };
 
-  // Structurally satisfies SearchTransport (resolve/resubmit); streaming and
-  // placeOptions are optional on the interface, so the store falls back to
+  // Structurally satisfies SearchTransport (resolve); streaming, resubmitDataset
+  // and placeOptions are optional on the interface, so the store falls back to
   // its buffered paths without them.
   class StubTransport {
     async resolve(query: string): Promise<ResolveResponse> {
@@ -243,9 +243,6 @@ vi.mock("./lib/store", () => {
       // response -- these tests only check refineText's own (partIndex,
       // text) arguments and that a sibling part survives, not that the
       // refined content itself changes.
-      return response;
-    }
-    async resubmit(): Promise<ResolveResponse> {
       return response;
     }
   }

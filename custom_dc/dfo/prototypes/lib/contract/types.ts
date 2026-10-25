@@ -170,7 +170,7 @@ export interface Shape {
    * a ratio-backed _AsAFractionOf_ standard shape, where no sibling StatVar can
    * be constructed for an edited slot. Gate editability on this rather than
    * treating every slot as freely editable. For family-dependent resubmit field
-   * logic (which fields a spec_resubmit must carry), see promote.ts's
+   * logic (which fields a dataset_resubmit entry must carry), see promote.ts's
    * hasDirectionalEntity / whereSlotHasEntity instead. Defaults to false.
    */
   refine_supported?: boolean;
@@ -256,7 +256,7 @@ export type PipelineStepName =
 
 export interface PipelineStep {
   step: PipelineStepName;
-  /** false for extract on the parsed / spec_resubmit paths */
+  /** false for extract on the parsed / dataset_resubmit paths */
   ran: boolean;
   /** step latency, when measured */
   ms?: number;
@@ -279,7 +279,7 @@ export interface ResolutionTrace {
    * The literal string "latest" means the query explicitly asked for the
    * most-recent/current value; distinct from absent (no date signal at all).
    * spec_id is anchored on this value. Round-trip it verbatim as
-   * SpecResubmitInput.requested_window on a later spec_resubmit to keep
+   * BaseIdentity.requested_window on a later dataset_resubmit entry to keep
    * identity stable across promote.
    */
   requested_window?: RequestedWindow;
@@ -587,7 +587,14 @@ export interface ParsedPart {
 
 /** Fields every `Part` variant carries, regardless of its own status. */
 export interface PartBase {
-  /** The asked variable text, in query order. Null for spec_resubmit, which re-resolves an identified spec with no variable name. */
+  /**
+   * The asked variable text, in query order. Echoed back onto the rebuilt
+   * part for every dataset_resubmit entry kind (identity, candidates,
+   * placeholder, and parsed via its nested ParsedPart), so this is always
+   * populated there. Null only when the whole posted query was empty or
+   * whitespace-only (raw_text door), which refuses with
+   * variable_not_resolved before extraction runs and so has no text to name.
+   */
   variable_text?: string | null;
   /** This part's own signals only (e.g. `binding_folded`, `observations_omitted`). */
   warnings: Warning[];
@@ -664,14 +671,14 @@ export interface Diagnostics {
 }
 
 export interface QueryEcho {
-  entry_path: "raw_text" | "parsed" | "spec_resubmit" | "dataset_resubmit";
+  entry_path: "raw_text" | "parsed" | "dataset_resubmit";
   /** the user's words (raw_text path) */
   raw_query?: string;
   /** post-extraction normalised text (raw_text path) */
   normalized_query?: string;
   /** the variable text resolved, after conjunction split */
   variable_text: string[];
-  /** true on the parsed and spec_resubmit paths */
+  /** true on the parsed and dataset_resubmit paths */
   extract_skipped: boolean;
 }
 
@@ -736,37 +743,6 @@ export interface ParsedInput {
   raw_query?: string;
 }
 
-/**
- * path C: refine, promote a candidate, explore. Extract skipped. Contract v1:
- * `identity` is the complete edited definition. A no-op resubmit posts a
- * prior `Spec.definition.identity` byte-for-byte. `base_spec_id`/
- * `base_identity` name the prior spec being edited (verified by hash);
- * `removed` acknowledges any facet axis / entity role dropped entirely
- * (never a slot, since every shape-declared slot key is always present,
- * with `unbound` being its own removal signal). `extra="forbid"` on the
- * wire: no top-level `shape`/`slots`/`shape_id`/`donor_dcid`/
- * `entity_dcids`/`requested_window` survive outside `identity`.
- */
-export interface SpecResubmitInput {
-  kind: "spec_resubmit";
-  identity: BaseIdentity;
-  /** the base spec this edit applies to, or the candidate spec_id being
-   *  promoted — verified by hash against base_identity */
-  base_spec_id?: string;
-  /** the base's full identity, verified by hash against base_spec_id;
-   *  required alongside base_spec_id */
-  base_identity?: BaseIdentity;
-  removed?: RemovedParts;
-  /**
-   * The base's own resolved StatVar dcid(s) — a sibling of `identity`, not a
-   * member of it: pure graph state, never hashed into spec_id. Required for
-   * a standard (catch-all) shape's promote/refine; ignored for named
-   * families, which reconstruct their StatVars from `identity.slots`
-   * bindings instead.
-   */
-  resolved_stat_var_dcids?: string[];
-}
-
 /** path D: resolve from an existing spec_id directly. */
 export interface SpecIdInput {
   kind: "spec_id";
@@ -790,11 +766,13 @@ export interface DatasetCandidateEntry {
 }
 
 /**
- * A resolved (or edited) part, resubmitted as its full identity — the same
- * fields as `SpecResubmitInput` minus `kind`, plus `entry_kind` and
- * `variable_text` (every entry carries its own, unlike a lone spec_resubmit).
- * A shape change (what the variable IS) refuses `shape_mismatch`; changing
- * what a variable is stays a fresh raw_text run.
+ * A resolved (or edited) part, resubmitted as its full identity: `identity`
+ * plus the sibling fields `promoteFromSpec` derives (`base_spec_id`/
+ * `base_identity`/`removed`/`resolved_stat_var_dcids`), plus `entry_kind` and
+ * `variable_text` (every entry carries its own, since a multi-part envelope
+ * has no single shared variable_text). A shape change (what the variable IS)
+ * refuses `shape_mismatch`; changing what a variable is stays a fresh
+ * raw_text run.
  */
 export interface DatasetIdentityEntry {
   entry_kind: "identity";
@@ -850,8 +828,8 @@ export type DatasetResubmitEntry =
 /**
  * path E: resubmit every part of a multi-variable response at once and get
  * back the full N-part envelope with the composed sentence, rather than one
- * `spec_resubmit` per part with client-side splicing. `entries` is 1 to 6, in
- * response part order. `raw_query` is echo-only, for `query_echo`.
+ * identity-edit request per part with client-side splicing. `entries` is 1
+ * to 6, in response part order. `raw_query` is echo-only, for `query_echo`.
  */
 export interface DatasetResubmitInput {
   kind: "dataset_resubmit";
@@ -863,7 +841,6 @@ export interface DatasetResubmitInput {
 export type ResolveInput =
   | RawTextInput
   | ParsedInput
-  | SpecResubmitInput
   | SpecIdInput
   | DatasetResubmitInput;
 

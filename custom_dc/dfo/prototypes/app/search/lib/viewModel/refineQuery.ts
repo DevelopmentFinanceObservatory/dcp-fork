@@ -8,8 +8,9 @@
  * phrase's text for what the user typed, and hands back the resulting
  * plain-language string for a fresh resolve().
  *
- * WHY raw text and not spec_resubmit: resubmit bindings must be grounded refs
- * (dcids/enum values from the taxonomy), and typed text is neither — it
+ * WHY raw text and not a dataset-door edit: a dataset_resubmit binding must
+ * be a grounded ref (dcid/enum value from the taxonomy), and typed text is
+ * neither — it
  * hasn't been matched against anything yet, and swapping it in can change the
  * shape family entirely (a replacement variable may not even belong to the
  * same shape as the one it replaced). The rendered sentence is already a

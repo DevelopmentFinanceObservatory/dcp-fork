@@ -1,7 +1,7 @@
 /**
  * candidates — "aid to Africa".
  * Ambiguous: 2..N competing Specs, broadest first. Picking one promotes it to a
- * definite (via spec_resubmit). The two candidates here differ in their `what`
+ * definite (via dataset_resubmit). The two candidates here differ in their `what`
  * binding (all flows vs ODA grants) and carry different coverage treatments.
  */
 

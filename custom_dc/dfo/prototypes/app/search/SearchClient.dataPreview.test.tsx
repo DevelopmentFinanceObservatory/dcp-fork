@@ -25,9 +25,6 @@ vi.mock('./lib/store', () => {
     async resolve() {
       return definiteExact;
     }
-    async resubmit(): Promise<never> {
-      throw new Error('unused');
-    }
   }
   return { useSpecStore: createSpecStore(new StubTransport()) };
 });

@@ -68,7 +68,7 @@ vi.mock("./lib/store", () => {
     status: "definite",
     parts: [part1],
     query_echo: {
-      entry_path: "spec_resubmit",
+      entry_path: "raw_text",
       raw_query: "ODA flows",
       variable_text: ["ODA"],
       extract_skipped: true,
@@ -85,9 +85,6 @@ vi.mock("./lib/store", () => {
           raw_query: query,
         },
       };
-    }
-    async resubmit(): Promise<ResolveResponse> {
-      return response1;
     }
     async resolveSpecId(specId: string): Promise<ResolveResponse> {
       return {
